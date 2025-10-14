@@ -1,5 +1,5 @@
 import Stripe from 'stripe'; // Use Nodecompat or similar env setup for this in Workers
-import { getEmailService } from './email.js'; // Your EmailService wrapper
+ // Your EmailService wrapper
 // You need to provide sanitizeAndValidateUrl() and safeKvOperation() as you had in your code
 import { Buffer } from 'node:buffer';
 import { console } from 'node:inspector';
