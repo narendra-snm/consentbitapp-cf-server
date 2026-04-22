@@ -46,7 +46,7 @@ export async function handleStripeWebhook(request, env, ctx) {
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   };
-
+console.log(env.STRIPE_SECRET_KEY)
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
@@ -77,6 +77,16 @@ export async function handleStripeWebhook(request, env, ctx) {
       throw new Error('Webhook signature verification failed: ' + err.message);
     }
 
+const session = event.data.object;
+console.log('Received event:', session.metadata);
+
+// ✅ Metadata check (before switch)
+if (!session.metadata || session.metadata.key !== 'framer') {
+  console.log('⏩ Ignored: Not a Framer event');
+  return new Response('Ignored (not framer)', { status: 200 });
+}
+
+
     const safeKvOp = async (op, fallback, errMsg) => {
       try {
         return await op();
@@ -85,7 +95,7 @@ export async function handleStripeWebhook(request, env, ctx) {
         throw e;
       }
     };
-console.log(event)
+console.log(event.type)
     switch (event.type) {
       case 'customer.subscription.updated': {
         const subscription = event.data.object;
@@ -130,10 +140,53 @@ console.log(event)
             }
           }
         }
+
+
+        if(subscription.status==="canceled" ){
+try {
+    const payload = {
+      recipientEmail: email || "",
+      recipientName:subscription?.name|| "",
+      subject: "Welcome to ConsentBit 🎉",
+      html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #333;">Your ConsentBit Subscription Has Been Canceled</h2>
+          <p>Hi ${subscription?.name|| 'there'},</p>
+          <p>We're sorry to see you go! Your ConsentBit subscription has been successfully canceled, and your premium features will remain active until the end of your current billing period.</p>
+          <p>We'd truly appreciate it if you could take a moment to share why you decided to cancel; your feedback helps us improve and make ConsentBit even better for users like you.</p>
+          <p>Thank you for giving ConsentBit a try, and we hope to serve you again in the future.</p>
+          <p>Warm regards,<br>The ConsentBit Team</p>
+        </div>
+    `,
+    domain: connectDomain,
+  
+    };
+
+    // Call Make webhook
+    const makeWebhookUrl = "https://hook.us1.make.com/e6qg4kchtoeicjoo3dy0vdrcxg1het6p"; // <-- add your webhook URL here
+
+    const response = await fetch(makeWebhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-make-apikey": "6efc13e343adca715c2a0a6d403a9291" 
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.text();
+    // optional: log result for debugging
+    console.log("Email sent:", result);
+  } catch (err) {
+    // silently handle error
+    console.error("Failed to send email:", err);
+  }
+
+        }
         break;
       }
 
       case 'checkout.session.completed': {
+        console.log('Processing checkout.session.completed event');
         const session = event.data.object;
         const customerId = session.customer;
         const email = session.customer_details?.email;
@@ -144,7 +197,7 @@ console.log(event)
         // Find domain from custom fields
         let connectDomain = null;
         if (Array.isArray(session.custom_fields)) {
-          const domainField = session.custom_fields.find(f => f.key === 'adddomain');
+          const domainField = session.custom_fields.find(f => f.key === 'yourwebsiteurllivedomain');
           const customDomainField = session.custom_fields.find(f => f.key === 'customdomain');
           if (domainField?.text?.value) connectDomain = sanitizeAndValidateUrl(domainField.text.value);
           else if (customDomainField?.text?.value) connectDomain = sanitizeAndValidateUrl(customDomainField.text.value);
@@ -175,17 +228,48 @@ console.log(event)
             email,
             status: session.status,
             lastUpdated: new Date().toISOString(),
-            cancelAtPeriodEnd: false,
+            cancelAtPeriodEnd: session.cancel_at_period_end || false,
           };
-          await env.ACTIVE_SITES_CONSENTBIT_FRAMER.put(connectDomain, JSON.stringify(activeSiteData));
-        }
 
-       try {
-    const payload = {
-      recipientEmail: body.userData.email || "",
-      recipientName: body.userData.name || "",
-      subject: "Welcome to ConsentBit 🎉",
-      html: `<!DOCTYPE html>
+try {
+  const payload = {
+    sender: {
+      name: "ConsentBit Team",
+      email: "web@email.consentbit.com"
+    },
+    to: [
+      {
+        email: email || "",
+        name: session.customer || ""
+      }
+    ],
+    subject: "Welcome to ConsentBit 🎉",
+
+    // ⭐ Plain text version for better deliverability
+    textContent: `
+Thank you for Signing Up with ConsentBit!
+
+Thank you for choosing the ConsentBit paid plan! We're excited to have you onboard and help you streamline consent and privacy management with ease, reliability, and compliance.
+
+The next step is to install the ConsentBit app on your Framer website. Once installed, you’ll be able to publish seamlessly to your custom domain and use all the premium features included in your plan.
+
+Need assistance? We've got you covered:
+
+Email us anytime at web@consentbit.com
+
+Book a support call: https://calendly.com/jibin-seattlenewmedia/30min
+
+Contact form: https://www.consentbit.com/contact
+
+If you have any questions, feature suggestions, or need help with installation, we’re always here to assist you.
+
+Thanks again,
+The ConsentBit Team
+    `,
+
+    // ⭐ HTML version (your existing template)
+    htmlContent: `
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -198,14 +282,9 @@ console.log(event)
     Thank you for choosing the <b>ConsentBit paid plan!</b>  We're excited to have you onboard and to help you streamline consent and privacy management with ease, reliability, and compliance.
   </p>
   <p>
-  The next step is to <b>install the ConsentBit app</b> on your Webflow website. Once installed, you'll be able to publish seamlessly to your custom domain and take advantage of all the premium features included in your plan.
+  The next step is to <b>install the ConsentBit app</b> on your Framer website. Once installed, you'll be able to publish seamlessly to your custom domain and take advantage of all the premium features included in your plan.
   </p>
-  <p>  To get started smoothly, we've prepared a few resources for you: </p>
-  <ul>
-    <li><a href="https://www.consentbit.com/help-document" target="_blank">Quick Start Guide</a> - step-by-step instructions for setup and deployment.</li>
-   <li><a href="https://vimeo.com/1090979483/99f46cddbf" target="_blank">Video Walkthrough </a> - learn how to configure the app from basics to advanced settings. </li>
-    <li> <a href="https://www.consentbit.com/blog" target="_blank">Blogs & Newsletter </a> - explore best practices and advanced tips for ongoing optimization.</li>
-  </ul>
+
   <p>Need assistance? We've got you covered:</p>
   <ul>
     <li>Email us anytime at <a href="mailto:web@consentbit.com">web@consentbit.com</a></li>
@@ -224,7 +303,35 @@ console.log(event)
 </body>
 </html>
     `,
+
+    // Not used by Brevo, but if you need to send them in webhook logs:
    
+  };
+
+  // ⭐ Call Brevo API
+  const brevoResponse = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": env.BREVO_API_KEY // Make sure this is in your Cloudflare Vars
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const result = await brevoResponse.json();
+  console.log("Brevo email sent:", result);
+
+} catch (err) {
+  console.error("Failed to send email:", err);
+}
+
+ try {
+    const payload = {
+      recipientEmail: email || "",
+      recipientName: session.customer|| "",
+     
+    domain: connectDomain,
+   clickup:"paid"
     };
 
     // Call Make webhook
@@ -247,6 +354,12 @@ console.log(event)
     console.error("Failed to send email:", err);
   }
 
+
+
+          await env.ACTIVE_SITES_CONSENTBIT_FRAMER.put(connectDomain, JSON.stringify(activeSiteData));
+        }
+
+      
         break;
       }
 
@@ -273,6 +386,7 @@ console.log(event)
                 status: subscription.status,
                 lastUpdated: new Date().toISOString(),
                 reason: 'deleted',
+
               };
               await activeSitesKv.put(cleanDomain, JSON.stringify(activeSiteDataToStore));
 

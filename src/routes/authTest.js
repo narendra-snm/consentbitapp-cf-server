@@ -151,7 +151,147 @@ export async function handleAuth(url, request, env, origin) {
         headers: { "Content-Type": "text/html", ...getCorsHeaders(origin) },
       });
     }
+if (url.pathname === "/auth/google/callback/v2") {
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state"); // this is the readKey
+  const siteUrl = url.searchParams.get("siteUrl") || null;
+  const siteId = url.searchParams.get("siteId") || null;
 
+  if (!code) {
+    return new Response(
+      JSON.stringify({ error: "No code received" }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  if (!state) {
+    return new Response(
+      JSON.stringify({ error: "Missing state/readKey" }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  const pending = await env.AUTH_PENDING.get(state, "json");
+  if (!pending) {
+    return new Response(
+      `
+      <!DOCTYPE html>
+      <html>
+        <head><title>Auth Failed</title></head>
+        <body>
+          <h3>Login session expired</h3>
+          <p>Please close this window and try again.</p>
+        </body>
+      </html>
+      `,
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "text/html",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: `${env.SERVER_URL}/auth/google/callback/v2`,
+      grant_type: "authorization_code",
+    }),
+  });
+
+  const tokenData = await tokenRes.json();
+
+  if (!tokenData.access_token) {
+    return new Response(
+      JSON.stringify({
+        error: "Failed to get access_token",
+        details: tokenData,
+      }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: {
+      Authorization: `Bearer ${tokenData.access_token}`,
+    },
+  });
+
+  const googleUser = await userRes.json();
+
+  const user = {
+    id: googleUser.id,
+    name: googleUser.name,
+    email: googleUser.email,
+    picture: googleUser.picture,
+    productionUrl: pending.siteUrl || siteUrl || "",
+    stagingUrl: pending.stagingUrl || "",
+    siteId: pending.siteId || siteId || null,
+  };
+
+  const jwtToken = await generateToken(user, AUTH_JWT_SECRET);
+
+  await env.AUTH_PENDING.put(
+    `tokens_${state}`,
+    JSON.stringify({
+      token: jwtToken,
+      user,
+    }),
+    { expirationTtl: 300 }
+  );
+
+  const html = `
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <title>Auth Complete</title>
+      <meta charset="utf-8" />
+    </head>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+      <h3>Authorization complete</h3>
+      <p>You can close this window now.</p>
+      <script>
+        setTimeout(() => {
+          try { window.close(); } catch (e) {}
+        }, 500);
+      </script>
+    </body>
+  </html>
+  `;
+
+  return new Response(html, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/html",
+      ...getCorsHeaders(origin),
+    },
+  });
+}
     // --- Verify JWT ---
     if (url.pathname === "/auth/me") {
       const authHeader = request.headers.get("Authorization") || "";
@@ -173,6 +313,10 @@ const published= data.isPublished ? data.isPublished : false;
       );
     }
 
+
+
+    
+
     // --- Get / Save user KV ---
     if (url.pathname.startsWith("/auth/user/")) {
       if (!env.AUTH_STORE_FRAMER) {
@@ -193,6 +337,8 @@ const published= data.isPublished ? data.isPublished : false;
       }
 
      if (request.method === "POST") {
+
+
   const body = await validateJSONBody(request);
 console.log("Received body:", body);
   // Get the existing data (if any)
@@ -362,6 +508,103 @@ The ConsentBit Team
     ? { ...existingData, ...body } // merge existing + new
     : body; // if no previous data, just use the new one
 
+
+if(!updatedData.paid){
+    const siteUrl =
+  body?.userData?.productionUrl ||
+  body?.userData?.stagingUrl ||
+  "";
+
+
+// 🔍 Check Pending KV by URL
+const pendingData = siteUrl
+  ? await env.Pending_Active_site.get(siteUrl, "json")
+  : null;
+
+if (pendingData) {
+  // 🧪 Send simple test email (test server)
+  // try {
+  //   await fetch("https://api.brevo.com/v3/smtp/email", {
+  //     method: "POST",
+  //     headers: {
+  //       "Content-Type": "application/json",
+  //       "api-key": env.BREVO_API_KEY
+  //     },
+  //     body: JSON.stringify({
+  //       sender: {
+  //         name: "ConsentBit Test",
+  //         email: "web@email.consentbit.com"
+  //       },
+  //       to: [{ email: body.userData.email }],
+  //       subject: "ConsentBit Activated",
+  //       textContent: "Hi"
+  //     })
+  //   });
+  // } catch (e) {
+  //   console.error("Test email failed", e);
+  // }
+
+  // ✅ Move to Active (Framer) KB
+  const PaidState = {
+    ...updatedData,
+    paid: true,
+    activatedAt: new Date().toISOString()
+  };
+
+  await env.AUTH_STORE_FRAMER.put(
+    siteIdParam,
+    JSON.stringify(PaidState)
+  );
+
+  // 🧹 Remove from Pending KV
+   const customerId = pendingData.customerId;
+
+  if (customerId) {
+    // 1) Get subscription data from PENDING_SUBSCRIPTION_CONSENTBIT
+    const pendingSubRaw = await env.PENDING_SUBSCRIPTION_CONSENTBIT.get(
+      customerId,
+      "json"
+    );
+
+    if (pendingSubRaw) {
+      // 2) Store it into SUBSCRIPTION_CONSENTBIT_FRAMER
+      await env.SUBSCRIPTION_CONSENTBIT_FRAMER.put(
+        customerId,
+        JSON.stringify(pendingSubRaw)
+      );
+
+      // 3) Delete from PENDING_SUBSCRIPTION_CONSENTBIT
+      // await env.PENDING_SUBSCRIPTION_CONSENTBIT.delete(customerId);
+    }
+  }
+
+await env.ACTIVE_SITES_CONSENTBIT_FRAMER.put(
+  siteUrl,
+  JSON.stringify({
+    ...pendingData,
+    
+  })
+);
+
+//  await env.Pending_Active_site.delete(siteUrl);
+  return new Response(
+    JSON.stringify({
+      success: true,
+      siteId: siteIdParam,
+      activatedFromPending: true,
+      saved: updatedData
+    }),
+    {
+      headers: {
+        "Content-Type": "application/json",
+        ...getCorsHeaders(origin),
+      },
+    }
+  );
+}
+}
+
+
   // Save merged data back to KV
   await env.AUTH_STORE_FRAMER.put(siteIdParam, JSON.stringify(updatedData));
 
@@ -373,6 +616,7 @@ The ConsentBit Team
     JSON.stringify({
       success: true,
       siteId: siteIdParam,
+      activatedFromPending: false,
       saved: updatedData,
     }),
     {
@@ -384,6 +628,201 @@ The ConsentBit Team
   );
 }
     }
+
+// ✅ NEW: Step 1 - Plugin calls this to get Google URL + readKey
+if (url.pathname === "/auth/authorize" && request.method === "POST") {
+  if (!env.AUTH_PENDING) {
+    return new Response(
+      JSON.stringify({ error: "AUTH_PENDING KV binding missing" }),
+      { status: 500, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) } }
+    );
+  }
+
+  const body = await validateJSONBody(request);
+  const readKey = crypto.randomUUID();
+
+  await env.AUTH_PENDING.put(
+    readKey,
+    JSON.stringify({
+      siteId: body.siteId || null,
+      siteUrl: body.siteUrl || null,
+      stagingUrl: body.stagingUrl || null,
+    }),
+    { expirationTtl: 300 }
+  );
+
+  const redirectUri = `${env.SERVER_URL}/auth/google/callback/v2`;
+  const googleUrl =
+    `https://accounts.google.com/o/oauth2/v2/auth` +
+    `?client_id=${env.GOOGLE_CLIENT_ID}` +
+    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+    `&response_type=code` +
+    `&scope=profile%20email` +
+    `&prompt=consent%20select_account` +
+    `&state=${encodeURIComponent(readKey)}`;
+
+  return new Response(
+    JSON.stringify({ url: googleUrl, readKey }),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        ...getCorsHeaders(origin),
+      },
+    }
+  );
+}
+
+// ✅ NEW: Step 3 - Google redirects here
+if (url.pathname === "/auth/redirect") {
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+
+  if (!state || !code) {
+    return new Response(
+      `<html><body><h3>Missing code or state</h3></body></html>`,
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "text/html",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  const pending = await env.AUTH_PENDING.get(state, "json");
+  if (!pending) {
+    return new Response(
+      `<html><body><h3>Session expired</h3></body></html>`,
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "text/html",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      code,
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      redirect_uri: `${env.SERVER_URL}/auth/redirect`,
+      grant_type: "authorization_code",
+    }),
+  });
+
+  const tokenData = await tokenRes.json();
+
+  if (!tokenData.access_token) {
+    console.error("Google token failed:", tokenData);
+    return new Response(
+      `<html><body><h3>Token exchange failed</h3></body></html>`,
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "text/html",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: { Authorization: `Bearer ${tokenData.access_token}` },
+  });
+  const googleUser = await userRes.json();
+
+  const user = {
+    id: googleUser.id,
+    name: googleUser.name,
+    email: googleUser.email,
+    picture: googleUser.picture,
+  };
+
+  const jwtToken = await generateToken(user, AUTH_JWT_SECRET);
+
+  await env.AUTH_PENDING.put(
+    `tokens_${state}`,
+    JSON.stringify({
+      token: jwtToken,
+      user: {
+        ...user,
+        productionUrl: pending.siteUrl || "",
+        stagingUrl: pending.stagingUrl || "",
+      },
+    }),
+    { expirationTtl: 300 }
+  );
+
+  return new Response(
+    `
+    <!DOCTYPE html>
+    <html>
+      <head><meta charset="UTF-8"></head>
+      <body>
+        <h3>Success!</h3>
+        <p>Closing in 1 second...</p>
+        <script>setTimeout(() => window.close(), 1000);</script>
+      </body>
+    </html>
+    `,
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html",
+        ...getCorsHeaders(origin),
+      },
+    }
+  );
+}
+
+// ✅ NEW: Step 4 - Plugin polls this until tokens ready
+if (url.pathname === "/auth/poll" && request.method === "POST") {
+  const readKey = url.searchParams.get("readKey");
+
+  if (!readKey) {
+    return new Response(
+      JSON.stringify({ error: "Missing readKey" }),
+      {
+        status: 400,
+        headers: {
+          "Content-Type": "application/json",
+          ...getCorsHeaders(origin),
+        },
+      }
+    );
+  }
+
+  const tokensData = await env.AUTH_PENDING.get(`tokens_${readKey}`, "json");
+
+  if (!tokensData) {
+    return new Response(null, {
+      status: 204,
+      headers: getCorsHeaders(origin),
+    });
+  }
+
+  await env.AUTH_PENDING.delete(readKey);
+  await env.AUTH_PENDING.delete(`tokens_${readKey}`);
+
+  return new Response(
+    JSON.stringify(tokensData),
+    {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        ...getCorsHeaders(origin),
+      },
+    }
+  );
+}
+
 
     return null;
   } catch (err) {
