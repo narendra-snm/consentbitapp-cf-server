@@ -308,7 +308,7 @@ const kvData = await env.AUTH_STORE_FRAMER.get(siteId);
     const data= kvData ? JSON.parse(kvData) : null;
 const published= data.isPublished ? data.isPublished : false;
       return new Response(
-        JSON.stringify(user ? { loggedIn: true,kvData:kvData,user: user, isPublished:published,siteId:siteId } : { loggedIn: false }),
+        JSON.stringify(user ? { loggedIn: true,kvData:data,user: user, isPublished:published,siteId:siteId } : { loggedIn: false }),
         { status: user ? 200 : 401, headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) } }
       );
     }
@@ -354,7 +354,7 @@ try {
     to: [
       {
         email: body.userData.email || "",
-        name: body.userData.name || ""
+        name: body.userData.name || body.userData.email?.split("@")[0] || "ConsentBit User"
       }
     ],
     subject: "Welcome to ConsentBit 🎉",

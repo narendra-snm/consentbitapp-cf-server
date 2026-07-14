@@ -5,6 +5,7 @@ import { handleVisitor } from "./routes/visitor.js";
 import { handleLocation } from "./routes/location.js";
 import { handleConsent } from "./routes/consent.js";
 import { fetchscript } from "./routes/fetchscripts.js";
+import { handleVerifyOTP } from "./routes/verifyOTP.js";
 import { handleStripeWebhook} from './routes/stripeWebhook.js';
 import { handleStripeWebhookWebsite} from './routes/stripeWebhookTest.js';
 import { onRequestGet } from './routes/subscriptionStaus.js';
@@ -38,7 +39,8 @@ async function apiHandler(request, env, ctx) {
     (await handleVisitor(url, request, env, origin)) ||
     (await handleLocation(url, request, env, origin)) ||
     (await handleConsent(url, request, env, origin)) ||
-    (await fetchscript(url, request, env, origin));
+    (await fetchscript(url, request, env, origin)) ||
+    (await handleVerifyOTP(url, request, env, origin));
 
  
 

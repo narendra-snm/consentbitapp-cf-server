@@ -613,8 +613,9 @@ if (request.method === "GET" && url.pathname === "/site/paid-status") {
     const activeData = activeDataRaw ? JSON.parse(activeDataRaw) : null;
 
     const paidStatus = activeData && activeData.active === true && activeData.status === "complete";
+    const isLegacy = activeDataRaw !== null;
 
-    return new Response(JSON.stringify({ productionUrl, paid: paidStatus }), {
+    return new Response(JSON.stringify({ productionUrl, paid: paidStatus, isLegacy }), {
       status: 200,
       headers: {
         "Content-Type": "application/json",

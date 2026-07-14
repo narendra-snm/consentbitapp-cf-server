@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 
-export async function generateToken(payload, secret, exp = "1h") {
+export async function generateToken(payload, secret, exp = "30d") {
   return await new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setExpirationTime(exp)
