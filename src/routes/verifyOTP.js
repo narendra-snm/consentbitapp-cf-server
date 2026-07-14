@@ -1,6 +1,7 @@
 import { getCorsHeaders } from '../utils/cors.js';
 import { validateJSONBody } from '../utils/security-validation.js';
 import { generateToken } from '../utils/jwt.js';
+import { captureEvent, bumpSessionCount } from '../utils/posthog.js';
 
 const OTP_TTL_SECONDS = 10 * 60;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -82,7 +83,7 @@ ConsentBit Team
 	};
 }
 
-export async function handleVerifyOTP(url, request, env, origin) {
+export async function handleVerifyOTP(url, request, env, origin, ctx) {
 	try {
 		const kv = env['verify-email'];
 
@@ -200,6 +201,30 @@ export async function handleVerifyOTP(url, request, env, origin) {
 			const AUTH_JWT_SECRET = new TextEncoder().encode(env.JWT_SECRET);
 			const user = { email, siteId, verifiedAt: new Date().toISOString() };
 			const token = await generateToken(user, AUTH_JWT_SECRET);
+
+			// Analytics — emitted here, server-side, because the Framer plugin no
+			// longer talks to PostHog directly (Marketplace forbids loading
+			// third-party scripts and sending user data to third-party analytics).
+			// This is the moment authorization completes, which is exactly where the
+			// plugin used to fire `app_opened`. The `$set` block doubles as the
+			// identify call, keyed on the user's email.
+			//
+			// waitUntil keeps this off the response path, so verify-otp stays fast.
+			const analytics = (async () => {
+				const sessionCount = await bumpSessionCount(kv, email);
+				await captureEvent(env, {
+					event: 'app_opened',
+					distinctId: email,
+					properties: { platform: 'framer', session_count: sessionCount },
+					set: { email, platform: 'framer', signup_source: 'organic' },
+				});
+			})();
+
+			if (ctx?.waitUntil) {
+				ctx.waitUntil(analytics);
+			} else {
+				await analytics;
+			}
 
 			return new Response(JSON.stringify({ success: true, verified: true, token, user }), {
 				status: 200,

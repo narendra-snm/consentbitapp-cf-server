@@ -1,8 +1,9 @@
 import { generateToken, verifyToken } from '../utils/jwt.js';
 import { getCorsHeaders } from '../utils/cors.js';
 import { validateJSONBody } from '../utils/security-validation.js';
+import { captureEvent } from '../utils/posthog.js';
 
-export async function fetchscript(url, request, env, origin) {
+export async function fetchscript(url, request, env, origin, ctx) {
 	try {
 		if (request.method === 'POST' && url.pathname === '/scripts') {
 			try {
@@ -580,6 +581,56 @@ The ConsentBit Team
 					// If paid already true, just save authData if updated (like isPublished)
 					console.log()
 					await env.AUTH_STORE_FRAMER.put(siteId, JSON.stringify(authData));
+				}
+
+				// Analytics — emitted here, server-side, because the Framer plugin no
+				// longer talks to PostHog directly (the Marketplace forbids loading
+				// third-party scripts and sending user data to third-party analytics).
+				//
+				// The plugin calls /banner/save-2 ONLY after the user confirmed the
+				// script-injection dialog and the tag actually landed in custom code,
+				// so reaching this point means the banner genuinely published — a
+				// cancelled or failed publish never gets here.
+				const analyticsEmail = authData.userData?.email || null;
+				if (analyticsEmail) {
+					const stripHost = (u) => (u || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+					const prodHost = stripHost(latestProduction || authData.userData?.productionUrl);
+					const stagingHost = stripHost(latestStaging || authData.userData?.stagingUrl);
+					// Anything that is not a *.framer.app address counts as a custom domain.
+					const isCustomDomain = !!prodHost && !/\.framer\.app$/i.test(prodHost);
+					const planTier = authData.plan || authData.planId || (authData.paid ? 'paid' : 'free');
+
+					const analytics = (async () => {
+						await captureEvent(env, {
+							event: 'banner_customized',
+							distinctId: analyticsEmail,
+							properties: { platform: 'framer', setting_changed: 'multiple' },
+							// The plan isn't known at login (it lives on the manager worker),
+							// so refresh the person's plan property here.
+							set: { plan: planTier },
+						});
+
+						if (isCustomDomain) {
+							await captureEvent(env, {
+								event: 'banner_published_custom_domain',
+								distinctId: analyticsEmail,
+								properties: { platform: 'framer', domain: prodHost, plan_tier: planTier },
+							});
+						} else {
+							await captureEvent(env, {
+								event: 'banner_published_staging',
+								distinctId: analyticsEmail,
+								properties: { platform: 'framer', domain: stagingHost || prodHost },
+							});
+						}
+					})();
+
+					// waitUntil keeps the events off the response path.
+					if (ctx?.waitUntil) {
+						ctx.waitUntil(analytics);
+					} else {
+						await analytics;
+					}
 				}
 
 				return new Response(JSON.stringify({ success: true, siteId }), {

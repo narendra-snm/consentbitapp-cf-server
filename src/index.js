@@ -39,8 +39,8 @@ async function apiHandler(request, env, ctx) {
     (await handleVisitor(url, request, env, origin)) ||
     (await handleLocation(url, request, env, origin)) ||
     (await handleConsent(url, request, env, origin)) ||
-    (await fetchscript(url, request, env, origin)) ||
-    (await handleVerifyOTP(url, request, env, origin));
+    (await fetchscript(url, request, env, origin, ctx)) ||
+    (await handleVerifyOTP(url, request, env, origin, ctx));
 
  
 
