@@ -212,11 +212,20 @@ export async function handleVerifyOTP(url, request, env, origin, ctx) {
 			// waitUntil keeps this off the response path, so verify-otp stays fast.
 			const analytics = (async () => {
 				const sessionCount = await bumpSessionCount(kv, email);
+				// Step 1 — framer_app_opened. project_id is the Framer project/site id.
+				// The $set block doubles as the identify call, keyed on the email.
 				await captureEvent(env, {
-					event: 'app_opened',
+					event: 'framer_app_opened',
 					distinctId: email,
-					properties: { platform: 'framer', session_count: sessionCount },
+					properties: { platform: 'framer', session_count: sessionCount, project_id: siteId },
 					set: { email, platform: 'framer', signup_source: 'organic' },
+				});
+				// Step 2 — auth_completed. This branch is only reached after the OTP
+				// is validated, so authorization always succeeded here.
+				await captureEvent(env, {
+					event: 'auth_completed',
+					distinctId: email,
+					properties: { platform: 'framer', status: 'success', project_id: siteId },
 				});
 			})();
 
